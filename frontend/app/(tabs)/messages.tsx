@@ -11,6 +11,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useLocalSearchParams } from 'expo-router';
@@ -21,6 +22,7 @@ import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || '';
+const WS_URL = API_URL.replace('https://', 'wss://').replace('http://', 'ws://');
 
 interface Conversation {
   partner_id: string;
@@ -50,8 +52,90 @@ export default function MessagesScreen() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+  const [isTyping, setIsTyping] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
   const scrollViewRef = useRef<ScrollView>(null);
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  // WebSocket connection
+  const connectWebSocket = useCallback(() => {
+    if (!sessionToken || wsRef.current?.readyState === WebSocket.OPEN) return;
+    
+    try {
+      const ws = new WebSocket(`${WS_URL}/ws/chat/${sessionToken}`);
+      
+      ws.onopen = () => {
+        console.log('WebSocket connected');
+        setWsConnected(true);
+      };
+      
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        
+        if (data.type === 'new_message') {
+          // Add new message to the list
+          setMessages(prev => [...prev, data.message]);
+          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+          // Refresh conversations
+          fetchConversations();
+        } else if (data.type === 'message_sent') {
+          // Message sent confirmation
+          setMessages(prev => [...prev, data.message]);
+          setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
+        } else if (data.type === 'user_typing') {
+          setIsTyping(true);
+          if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+          typingTimeoutRef.current = setTimeout(() => setIsTyping(false), 2000);
+        }
+      };
+      
+      ws.onclose = () => {
+        console.log('WebSocket disconnected');
+        setWsConnected(false);
+        // Reconnect after 3 seconds
+        setTimeout(connectWebSocket, 3000);
+      };
+      
+      ws.onerror = (error) => {
+        console.log('WebSocket error, falling back to polling:', error);
+        setWsConnected(false);
+      };
+      
+      wsRef.current = ws;
+    } catch (error) {
+      console.log('WebSocket not supported, using polling');
+      setWsConnected(false);
+    }
+  }, [sessionToken]);
+
+  // Send message via WebSocket
+  const sendMessageWS = useCallback(() => {
+    if (!selectedPartner || !newMessage.trim()) return;
+    
+    if (wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        action: 'send_message',
+        receiver_id: selectedPartner.partner_id,
+        content: newMessage.trim(),
+      }));
+      setNewMessage('');
+    } else {
+      // Fallback to HTTP
+      sendMessageHTTP();
+    }
+  }, [selectedPartner, newMessage]);
+
+  // Send typing indicator
+  const sendTypingIndicator = useCallback(() => {
+    if (!selectedPartner || wsRef.current?.readyState !== WebSocket.OPEN) return;
+    
+    wsRef.current.send(JSON.stringify({
+      action: 'typing',
+      receiver_id: selectedPartner.partner_id,
+    }));
+  }, [selectedPartner]);
 
   const fetchConversations = async () => {
     if (!sessionToken) return;
@@ -84,7 +168,7 @@ export default function MessagesScreen() {
     }
   };
 
-  const sendMessage = async () => {
+  const sendMessageHTTP = async () => {
     if (!sessionToken || !selectedPartner || !newMessage.trim()) return;
     try {
       const response = await fetch(`${API_URL}/api/messages`, {
@@ -107,6 +191,16 @@ export default function MessagesScreen() {
     }
   };
 
+  // Connect WebSocket on mount
+  useEffect(() => {
+    connectWebSocket();
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [sessionToken, connectWebSocket]);
+
   useEffect(() => {
     fetchConversations();
   }, [sessionToken]);
@@ -114,15 +208,17 @@ export default function MessagesScreen() {
   useEffect(() => {
     if (selectedPartner) {
       fetchMessages(selectedPartner.partner_id);
-      // Polling for real-time feel
-      pollingRef.current = setInterval(() => {
-        fetchMessages(selectedPartner.partner_id);
-      }, 3000);
+      // Polling only as fallback when WebSocket is not connected
+      if (!wsConnected) {
+        pollingRef.current = setInterval(() => {
+          fetchMessages(selectedPartner.partner_id);
+        }, 3000);
+      }
     }
     return () => {
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [selectedPartner]);
+  }, [selectedPartner, wsConnected]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -148,7 +244,14 @@ export default function MessagesScreen() {
               <Ionicons name="person" size={20} color="#64748B" />
             </View>
           )}
-          <Text style={styles.chatPartnerName}>{selectedPartner.partner_name}</Text>
+          <View style={styles.chatPartnerInfo}>
+            <Text style={styles.chatPartnerName}>{selectedPartner.partner_name}</Text>
+            {isTyping && (
+              <Text style={styles.typingIndicator}>écrit...</Text>
+            )}
+          </View>
+          {/* WebSocket status indicator */}
+          <View style={[styles.wsIndicator, wsConnected ? styles.wsConnected : styles.wsDisconnected]} />
         </View>
 
         {/* Messages */}
@@ -181,10 +284,13 @@ export default function MessagesScreen() {
             placeholder="Votre message..."
             placeholderTextColor="#64748B"
             value={newMessage}
-            onChangeText={setNewMessage}
+            onChangeText={(text) => {
+              setNewMessage(text);
+              sendTypingIndicator();
+            }}
             multiline
           />
-          <TouchableOpacity style={styles.sendButton} onPress={sendMessage}>
+          <TouchableOpacity style={styles.sendButton} onPress={sendMessageWS}>
             <Ionicons name="send" size={20} color="#0A1628" />
           </TouchableOpacity>
         </View>
@@ -366,7 +472,27 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: '600',
+  },
+  chatPartnerInfo: {
+    flex: 1,
     marginLeft: 12,
+  },
+  typingIndicator: {
+    color: '#4ECDC4',
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
+  wsIndicator: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    marginLeft: 8,
+  },
+  wsConnected: {
+    backgroundColor: '#4ECDC4',
+  },
+  wsDisconnected: {
+    backgroundColor: '#EF4444',
   },
   messagesContainer: {
     flex: 1,

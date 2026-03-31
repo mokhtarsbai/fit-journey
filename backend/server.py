@@ -1,5 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse, StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -7,7 +7,7 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
-from typing import List, Optional
+from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
@@ -15,6 +15,14 @@ import hashlib
 import secrets
 import jwt
 import bcrypt
+import io
+import asyncio
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import cm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -1634,6 +1642,315 @@ async def seed_data():
     
     return {"message": "Data seeded successfully", "coaches": len(coaches), "events": len(events), "challenges": len(challenges)}
 
+# ============== PDF INVOICE GENERATION ==============
+
+def generate_invoice_pdf(invoice_data: dict) -> io.BytesIO:
+    """Generate a real PDF invoice using ReportLab"""
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=2*cm, leftMargin=2*cm, topMargin=2*cm, bottomMargin=2*cm)
+    
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle('Title', parent=styles['Heading1'], fontSize=24, textColor=colors.HexColor('#4ECDC4'), alignment=TA_CENTER)
+    subtitle_style = ParagraphStyle('Subtitle', parent=styles['Normal'], fontSize=12, textColor=colors.gray, alignment=TA_CENTER)
+    header_style = ParagraphStyle('Header', parent=styles['Heading2'], fontSize=14, textColor=colors.HexColor('#0A1628'))
+    normal_style = ParagraphStyle('Normal', parent=styles['Normal'], fontSize=11)
+    right_style = ParagraphStyle('Right', parent=styles['Normal'], fontSize=11, alignment=TA_RIGHT)
+    
+    elements = []
+    
+    # Header
+    elements.append(Paragraph("FIT JOURNEY", title_style))
+    elements.append(Paragraph("Votre coach sportif à domicile au Maroc", subtitle_style))
+    elements.append(Spacer(1, 1*cm))
+    
+    # Invoice Info
+    elements.append(Paragraph(f"FACTURE N° {invoice_data.get('invoice_number', 'N/A')}", header_style))
+    elements.append(Paragraph(f"Date: {invoice_data.get('date', datetime.now().strftime('%d/%m/%Y'))}", normal_style))
+    elements.append(Spacer(1, 0.5*cm))
+    
+    # Client Info
+    elements.append(Paragraph("INFORMATIONS CLIENT", header_style))
+    elements.append(Paragraph(f"Nom: {invoice_data.get('client_name', 'N/A')}", normal_style))
+    elements.append(Paragraph(f"Email: {invoice_data.get('client_email', 'N/A')}", normal_style))
+    elements.append(Spacer(1, 0.5*cm))
+    
+    # Items Table
+    table_data = [['Description', 'Quantité', 'Prix unitaire', 'Total']]
+    
+    items = invoice_data.get('items', [])
+    subtotal = 0
+    for item in items:
+        qty = item.get('quantity', 1)
+        price = item.get('price', 0)
+        total = qty * price
+        subtotal += total
+        table_data.append([
+            item.get('description', 'Service'),
+            str(qty),
+            f"{price:.2f} MAD",
+            f"{total:.2f} MAD"
+        ])
+    
+    # Discount
+    discount = invoice_data.get('discount', 0)
+    discount_amount = subtotal * (discount / 100)
+    final_total = subtotal - discount_amount
+    
+    table_data.append(['', '', 'Sous-total:', f"{subtotal:.2f} MAD"])
+    if discount > 0:
+        table_data.append(['', '', f'Remise ({discount}%):', f"-{discount_amount:.2f} MAD"])
+    table_data.append(['', '', 'TOTAL:', f"{final_total:.2f} MAD"])
+    
+    table = Table(table_data, colWidths=[8*cm, 2.5*cm, 3.5*cm, 3.5*cm])
+    table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#4ECDC4')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (1, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -4), colors.HexColor('#F8FAFC')),
+        ('GRID', (0, 0), (-1, -4), 1, colors.HexColor('#E2E8F0')),
+        ('FONTNAME', (2, -3), (-1, -1), 'Helvetica-Bold'),
+        ('LINEABOVE', (2, -3), (-1, -3), 1, colors.gray),
+        ('LINEABOVE', (2, -1), (-1, -1), 2, colors.HexColor('#4ECDC4')),
+    ]))
+    
+    elements.append(table)
+    elements.append(Spacer(1, 1*cm))
+    
+    # Payment Info
+    elements.append(Paragraph("INFORMATIONS DE PAIEMENT", header_style))
+    elements.append(Paragraph(f"Mode de paiement: {invoice_data.get('payment_method', 'CMI')}", normal_style))
+    elements.append(Paragraph(f"Statut: {invoice_data.get('payment_status', 'Payé')}", normal_style))
+    elements.append(Spacer(1, 0.5*cm))
+    
+    # Footer
+    footer_style = ParagraphStyle('Footer', parent=styles['Normal'], fontSize=9, textColor=colors.gray, alignment=TA_CENTER)
+    elements.append(Spacer(1, 1*cm))
+    elements.append(Paragraph("Fit Journey SARL - RC: 123456 - IF: 12345678", footer_style))
+    elements.append(Paragraph("Casablanca, Maroc - contact@fitjourney.ma", footer_style))
+    elements.append(Paragraph("Conforme à la réglementation CNDP", footer_style))
+    
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+@api_router.get("/invoices/{pack_id}/pdf")
+async def get_pack_invoice_pdf(pack_id: str, user: User = Depends(get_current_user)):
+    """Generate and download a PDF invoice for a pack purchase"""
+    pack = await db.packs.find_one({"pack_id": pack_id, "client_id": user.user_id}, {"_id": 0})
+    if not pack:
+        raise HTTPException(status_code=404, detail="Pack not found")
+    
+    coach = await db.coaches.find_one({"coach_id": pack["coach_id"]}, {"_id": 0})
+    coach_name = coach.get("name", "Coach") if coach else "Coach"
+    
+    invoice_number = f"FJ-{pack_id[-8:].upper()}-{datetime.now().strftime('%Y%m')}"
+    
+    invoice_data = {
+        "invoice_number": invoice_number,
+        "date": pack.get("created_at", datetime.now()).strftime("%d/%m/%Y"),
+        "client_name": user.name,
+        "client_email": user.email,
+        "items": [{
+            "description": f"Pack {pack['total_sessions']} séances - {pack['discipline']} avec {coach_name}",
+            "quantity": 1,
+            "price": pack.get("original_price", 0)
+        }],
+        "discount": pack.get("discount_percent", 0),
+        "payment_method": "CMI (Carte bancaire)",
+        "payment_status": "Payé"
+    }
+    
+    pdf_buffer = generate_invoice_pdf(invoice_data)
+    
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=facture_{invoice_number}.pdf"}
+    )
+
+@api_router.post("/invoices/generate")
+async def generate_custom_invoice(
+    items: List[dict],
+    discount: float = 0,
+    user: User = Depends(get_current_user)
+):
+    """Generate a custom PDF invoice"""
+    invoice_number = f"FJ-{uuid.uuid4().hex[:8].upper()}-{datetime.now().strftime('%Y%m')}"
+    
+    invoice_data = {
+        "invoice_number": invoice_number,
+        "date": datetime.now().strftime("%d/%m/%Y"),
+        "client_name": user.name,
+        "client_email": user.email,
+        "items": items,
+        "discount": discount,
+        "payment_method": "CMI (Carte bancaire)",
+        "payment_status": "Payé"
+    }
+    
+    pdf_buffer = generate_invoice_pdf(invoice_data)
+    
+    return StreamingResponse(
+        pdf_buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=facture_{invoice_number}.pdf"}
+    )
+
+# ============== WEBSOCKET CHAT ==============
+
+class ConnectionManager:
+    """Manage WebSocket connections for real-time chat"""
+    
+    def __init__(self):
+        self.active_connections: Dict[str, List[WebSocket]] = {}
+    
+    async def connect(self, websocket: WebSocket, user_id: str):
+        await websocket.accept()
+        if user_id not in self.active_connections:
+            self.active_connections[user_id] = []
+        self.active_connections[user_id].append(websocket)
+        logger.info(f"User {user_id} connected to WebSocket")
+    
+    def disconnect(self, websocket: WebSocket, user_id: str):
+        if user_id in self.active_connections:
+            if websocket in self.active_connections[user_id]:
+                self.active_connections[user_id].remove(websocket)
+            if not self.active_connections[user_id]:
+                del self.active_connections[user_id]
+        logger.info(f"User {user_id} disconnected from WebSocket")
+    
+    async def send_personal_message(self, message: dict, user_id: str):
+        if user_id in self.active_connections:
+            for connection in self.active_connections[user_id]:
+                try:
+                    await connection.send_json(message)
+                except Exception as e:
+                    logger.error(f"Error sending message to {user_id}: {e}")
+    
+    async def broadcast_to_users(self, message: dict, user_ids: List[str]):
+        for user_id in user_ids:
+            await self.send_personal_message(message, user_id)
+
+manager = ConnectionManager()
+
+@app.websocket("/ws/chat/{token}")
+async def websocket_chat(websocket: WebSocket, token: str):
+    """WebSocket endpoint for real-time chat"""
+    # Verify JWT token
+    try:
+        payload = decode_token(token)
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+    
+    await manager.connect(websocket, user_id)
+    
+    try:
+        while True:
+            data = await websocket.receive_json()
+            
+            action = data.get("action")
+            
+            if action == "send_message":
+                receiver_id = data.get("receiver_id")
+                content = data.get("content")
+                
+                if not receiver_id or not content:
+                    await websocket.send_json({"error": "receiver_id and content required"})
+                    continue
+                
+                # Get sender info
+                sender = await db.users.find_one({"user_id": user_id}, {"_id": 0, "name": 1, "picture": 1})
+                sender_name = sender.get("name", "Unknown") if sender else "Unknown"
+                sender_picture = sender.get("picture") if sender else None
+                
+                # Save message to DB
+                message = {
+                    "message_id": f"msg_{uuid.uuid4().hex[:12]}",
+                    "sender_id": user_id,
+                    "receiver_id": receiver_id,
+                    "content": content,
+                    "sender_name": sender_name,
+                    "sender_picture": sender_picture,
+                    "read": False,
+                    "created_at": datetime.now(timezone.utc)
+                }
+                await db.messages.insert_one(message)
+                
+                # Remove MongoDB _id for JSON serialization
+                message.pop("_id", None)
+                message["created_at"] = message["created_at"].isoformat()
+                
+                # Send to receiver if online
+                await manager.send_personal_message({
+                    "type": "new_message",
+                    "message": message
+                }, receiver_id)
+                
+                # Confirm to sender
+                await websocket.send_json({
+                    "type": "message_sent",
+                    "message": message
+                })
+            
+            elif action == "mark_read":
+                partner_id = data.get("partner_id")
+                if partner_id:
+                    await db.messages.update_many(
+                        {"sender_id": partner_id, "receiver_id": user_id, "read": False},
+                        {"$set": {"read": True}}
+                    )
+                    await websocket.send_json({"type": "messages_marked_read", "partner_id": partner_id})
+            
+            elif action == "typing":
+                receiver_id = data.get("receiver_id")
+                if receiver_id:
+                    await manager.send_personal_message({
+                        "type": "user_typing",
+                        "sender_id": user_id
+                    }, receiver_id)
+            
+            elif action == "ping":
+                await websocket.send_json({"type": "pong"})
+    
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, user_id)
+    except Exception as e:
+        logger.error(f"WebSocket error for user {user_id}: {e}")
+        manager.disconnect(websocket, user_id)
+
+# Notification WebSocket for real-time alerts
+@app.websocket("/ws/notifications/{token}")
+async def websocket_notifications(websocket: WebSocket, token: str):
+    """WebSocket endpoint for real-time notifications"""
+    try:
+        payload = decode_token(token)
+        user_id = payload.get("sub")
+        if not user_id:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid token")
+        return
+    
+    await manager.connect(websocket, f"notif_{user_id}")
+    
+    try:
+        while True:
+            # Keep connection alive
+            data = await websocket.receive_json()
+            if data.get("action") == "ping":
+                await websocket.send_json({"type": "pong"})
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, f"notif_{user_id}")
+
 @api_router.get("/")
 async def root():
     return {
@@ -1641,7 +1958,8 @@ async def root():
         "status": "online",
         "auth": ["google", "apple", "email"],
         "security": ["JWT", "OAuth2.0", "TLS1.3", "bcrypt"],
-        "compliance": "CNDP Morocco"
+        "compliance": "CNDP Morocco",
+        "features": ["PDF invoices", "WebSocket chat", "Real-time notifications"]
     }
 
 app.include_router(api_router)

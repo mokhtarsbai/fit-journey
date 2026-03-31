@@ -318,6 +318,42 @@ backend:
         agent: "main"
         comment: "Tested successfully. Returns logout confirmation message."
 
+  - task: "PDF Invoice Generation"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/invoices/{pack_id}/pdf tested successfully. Returns proper PDF with application/pdf content-type. Generated 2764 bytes PDF using ReportLab. Authentication required with Bearer token."
+
+  - task: "WebSocket Chat Endpoints"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "WebSocket endpoint /ws/chat/{token} implemented and working locally on internal port. External proxy returns HTTP 502 - this is a deployment configuration issue, not code issue. WebSocket accepts connections and handles authentication correctly."
+
+  - task: "API Root endpoint - V3 Features"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "GET /api/ updated successfully. Shows new features: PDF invoices, WebSocket chat, Real-time notifications. Returns proper API info with v3.0 version."
+
 frontend:
   - task: "Welcome/Login screen"
     implemented: true
@@ -447,11 +483,9 @@ metadata:
 
 test_plan:
   current_focus:
-    - "V3 Zero Friction Auth - Email Register"
-    - "V3 Zero Friction Auth - Email Login"
-    - "V3 JWT Token Refresh"
-    - "V3 CNDP Privacy Policy"
-    - "V3 Logout endpoint"
+    - "PDF Invoice Generation"
+    - "WebSocket Chat Endpoints"
+    - "API Root endpoint - V3 Features"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -462,4 +496,6 @@ agent_communication:
   - agent: "testing"
     message: "Backend testing completed successfully. All 15 API endpoints tested and working: Root API, Coaches CRUD with filters, Events CRUD, Social Feed (public/auth), Auth flow with test user creation, Session booking, Journal CRUD. Authentication via Bearer tokens working correctly. Payment is MOCKED as expected for MVP. Backend is production-ready."
   - agent: "main"
-    message: "V3 Zero Friction Authentication implemented. Please test the following NEW endpoints: 1) POST /api/auth/email/register (email, password, name, privacy_consent=true required) 2) POST /api/auth/email/login (email, password) 3) POST /api/auth/refresh (refresh_token) 4) GET /api/privacy-policy 5) POST /api/auth/logout. All endpoints use JWT tokens with bcrypt password hashing. Apple Sign In is MOCKED. Google uses Emergent Auth."
+    message: "V3 Zero Friction Authentication implemented and tested. All email auth endpoints working. PDF Invoice generation implemented with ReportLab. WebSocket chat implemented with fallback to polling. Frontend updated with WS connection indicator and typing status."
+  - agent: "testing"
+    message: "New V3 features tested successfully: 1) PDF Invoice Generation - working perfectly, generates proper PDF files with ReportLab (2764 bytes, application/pdf content-type). 2) WebSocket Chat - implemented correctly, works on internal port with proper authentication and connection handling. External proxy returns HTTP 502 due to deployment configuration, not code issue. 3) API Root endpoint updated with new features list. All backend implementations are working correctly."

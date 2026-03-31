@@ -7,6 +7,8 @@ import {
   TouchableOpacity,
   RefreshControl,
   ActivityIndicator,
+  Linking,
+  Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -103,6 +105,22 @@ export default function BookingsScreen() {
     await fetchData();
     setRefreshing(false);
   }, []);
+
+  const downloadInvoice = async (packId: string) => {
+    try {
+      const invoiceUrl = `${API_URL}/api/invoices/${packId}/pdf`;
+      // For web, open in new tab. For mobile, use Linking
+      const supported = await Linking.canOpenURL(invoiceUrl);
+      if (supported) {
+        await Linking.openURL(invoiceUrl);
+      } else {
+        Alert.alert('Erreur', 'Impossible d\'ouvrir le lien de la facture');
+      }
+    } catch (error) {
+      console.error('Download invoice error:', error);
+      Alert.alert('Erreur', 'Erreur lors du téléchargement de la facture');
+    }
+  };
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -307,6 +325,14 @@ export default function BookingsScreen() {
                     </Text>
                     <Text style={styles.packPrice}>{pack.price} MAD</Text>
                   </View>
+                  {/* Download Invoice Button */}
+                  <TouchableOpacity 
+                    style={styles.invoiceButton}
+                    onPress={() => downloadInvoice(pack.pack_id)}
+                  >
+                    <Ionicons name="document-text-outline" size={18} color="#4ECDC4" />
+                    <Text style={styles.invoiceButtonText}>Télécharger la facture PDF</Text>
+                  </TouchableOpacity>
                 </View>
               ))
             )}
@@ -529,5 +555,21 @@ const styles = StyleSheet.create({
     color: '#4ECDC4',
     fontSize: 16,
     fontWeight: '600',
+  },
+  invoiceButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(78, 205, 196, 0.15)',
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 8,
+    marginTop: 12,
+    gap: 8,
+  },
+  invoiceButtonText: {
+    color: '#4ECDC4',
+    fontSize: 14,
+    fontWeight: '500',
   },
 });
