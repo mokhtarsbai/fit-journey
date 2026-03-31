@@ -234,6 +234,90 @@ backend:
         agent: "main"
         comment: "POST /api/seed creates 3 coaches and 3 events"
 
+  - task: "V3 Zero Friction Auth - Google OAuth"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "POST /api/auth/google - Google OAuth with JWT tokens. Requires OAuth flow to test."
+
+  - task: "V3 Zero Friction Auth - Apple Sign In"
+    implemented: true
+    working: "NA"
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "POST /api/auth/apple - Apple Sign In (MOCKED). Requires real Apple device."
+
+  - task: "V3 Zero Friction Auth - Email Register"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Tested successfully. Returns JWT tokens, validates consent, bcrypt hashing works."
+
+  - task: "V3 Zero Friction Auth - Email Login"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Tested successfully. Correct password returns tokens, wrong password returns 401."
+
+  - task: "V3 JWT Token Refresh"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Tested successfully. Returns new access_token and refresh_token."
+
+  - task: "V3 CNDP Privacy Policy"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Tested successfully. Returns full CNDP-compliant privacy policy in French."
+
+  - task: "V3 Logout endpoint"
+    implemented: true
+    working: true
+    file: "server.py"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "main"
+        comment: "Tested successfully. Returns logout confirmation message."
+
 frontend:
   - task: "Welcome/Login screen"
     implemented: true
@@ -363,7 +447,11 @@ metadata:
 
 test_plan:
   current_focus:
-    - "Frontend testing needed"
+    - "V3 Zero Friction Auth - Email Register"
+    - "V3 Zero Friction Auth - Email Login"
+    - "V3 JWT Token Refresh"
+    - "V3 CNDP Privacy Policy"
+    - "V3 Logout endpoint"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -373,3 +461,5 @@ agent_communication:
     message: "MVP implementation complete. Backend has full API for coaches, events, sessions, social feed, journal. Frontend has all screens. Payment is MOCKED. Need to test with authenticated user."
   - agent: "testing"
     message: "Backend testing completed successfully. All 15 API endpoints tested and working: Root API, Coaches CRUD with filters, Events CRUD, Social Feed (public/auth), Auth flow with test user creation, Session booking, Journal CRUD. Authentication via Bearer tokens working correctly. Payment is MOCKED as expected for MVP. Backend is production-ready."
+  - agent: "main"
+    message: "V3 Zero Friction Authentication implemented. Please test the following NEW endpoints: 1) POST /api/auth/email/register (email, password, name, privacy_consent=true required) 2) POST /api/auth/email/login (email, password) 3) POST /api/auth/refresh (refresh_token) 4) GET /api/privacy-policy 5) POST /api/auth/logout. All endpoints use JWT tokens with bcrypt password hashing. Apple Sign In is MOCKED. Google uses Emergent Auth."
