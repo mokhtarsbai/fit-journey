@@ -572,7 +572,8 @@ async def _google_auth_internal(session_id: str, consent_accepted: bool, respons
     access_token = create_access_token(user_id)
     refresh_token = create_refresh_token(user_id)
 
-    # Store refresh token
+    # Store refresh token (invalidate all previous ones first)
+    await db.refresh_tokens.delete_many({"user_id": user_id})
     await db.refresh_tokens.insert_one({
         "user_id": user_id,
         "token_hash": hashlib.sha256(refresh_token.encode()).hexdigest(),
@@ -829,10 +830,12 @@ async def login_email(data: EmailAuthRequest, response: Response):
         {"user_id": user_id},
         {"$set": {"last_login": datetime.now(timezone.utc)}}
     )
-    
+
     access_token = create_access_token(user_id)
     refresh_token = create_refresh_token(user_id)
-    
+
+    # Invalidate all previous refresh tokens before issuing a new one
+    await db.refresh_tokens.delete_many({"user_id": user_id})
     await db.refresh_tokens.insert_one({
         "user_id": user_id,
         "token_hash": hashlib.sha256(refresh_token.encode()).hexdigest(),

@@ -75,14 +75,22 @@ export default function MessagesScreen() {
         const data = JSON.parse(event.data);
         
         if (data.type === 'new_message') {
-          // Add new message to the list
-          setMessages(prev => [...prev, data.message]);
+          // Add new message to the list, deduplicating by message_id
+          setMessages(prev =>
+            prev.some(m => m.message_id === data.message.message_id)
+              ? prev
+              : [...prev, data.message]
+          );
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
           // Refresh conversations
           fetchConversations();
         } else if (data.type === 'message_sent') {
-          // Message sent confirmation
-          setMessages(prev => [...prev, data.message]);
+          // Message sent confirmation, deduplicating by message_id
+          setMessages(prev =>
+            prev.some(m => m.message_id === data.message.message_id)
+              ? prev
+              : [...prev, data.message]
+          );
           setTimeout(() => scrollViewRef.current?.scrollToEnd({ animated: true }), 100);
         } else if (data.type === 'user_typing') {
           setIsTyping(true);
