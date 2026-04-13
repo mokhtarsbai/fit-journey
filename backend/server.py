@@ -1178,19 +1178,21 @@ async def create_session(session_data: SessionCreate, user: User = Depends(get_c
     pack_id = None
     
     if session_data.use_credits:
-        pack = await db.packs.find_one({
-            "client_id": user.user_id,
-            "coach_id": session_data.coach_id,
-            "discipline": session_data.discipline,
-            "remaining_sessions": {"$gt": 0},
-            "expires_at": {"$gt": datetime.now(timezone.utc)}
-        }, {"_id": 0})
-        
+        # Atomique : le filtre remaining_sessions > 0 et la décrémentation
+        # se font en une seule opération — élimine la race condition
+        pack = await db.packs.find_one_and_update(
+            {
+                "client_id": user.user_id,
+                "coach_id": session_data.coach_id,
+                "discipline": session_data.discipline,
+                "remaining_sessions": {"$gt": 0},
+                "expires_at": {"$gt": datetime.now(timezone.utc)}
+            },
+            {"$inc": {"remaining_sessions": -1}},
+            return_document=False
+        )
+
         if pack:
-            await db.packs.update_one(
-                {"pack_id": pack["pack_id"]},
-                {"$inc": {"remaining_sessions": -1}}
-            )
             price = 0
             from_pack = True
             pack_id = pack["pack_id"]
@@ -1384,10 +1386,7 @@ async def register_for_event(event_id: str, looking_for_buddy: bool = False, use
     event = await db.events.find_one({"event_id": event_id}, {"_id": 0})
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-    
-    if event["current_participants"] >= event["max_participants"]:
-        raise HTTPException(status_code=400, detail="Event is full")
-    
+
     existing = await db.event_registrations.find_one({
         "event_id": event_id,
         "user_id": user.user_id,
@@ -1395,16 +1394,28 @@ async def register_for_event(event_id: str, looking_for_buddy: bool = False, use
     })
     if existing:
         raise HTTPException(status_code=400, detail="Already registered")
-    
+
+    # Atomique : $expr compare current_participants < max_participants dans le même
+    # document et incrémente en une seule opération — élimine l'overbooking
+    updated = await db.events.find_one_and_update(
+        {
+            "event_id": event_id,
+            "$expr": {"$lt": ["$current_participants", "$max_participants"]}
+        },
+        {"$inc": {"current_participants": 1}},
+        return_document=False
+    )
+    if not updated:
+        raise HTTPException(status_code=400, detail="Event is full")
+
     registration = EventRegistration(
         event_id=event_id,
         user_id=user.user_id,
         looking_for_buddy=looking_for_buddy
     )
-    
+
     await db.event_registrations.insert_one(registration.model_dump())
-    await db.events.update_one({"event_id": event_id}, {"$inc": {"current_participants": 1}})
-    
+
     return registration
 
 @api_router.get("/events/{event_id}/buddies")
