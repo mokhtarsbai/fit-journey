@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Linking,
   Alert,
+  Platform,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -107,14 +108,36 @@ export default function BookingsScreen() {
   }, []);
 
   const downloadInvoice = async (packId: string) => {
+    if (!sessionToken) return;
     try {
       const invoiceUrl = `${API_URL}/api/invoices/${packId}/pdf`;
-      // For web, open in new tab. For mobile, use Linking
-      const supported = await Linking.canOpenURL(invoiceUrl);
-      if (supported) {
-        await Linking.openURL(invoiceUrl);
+      if (Platform.OS === 'web') {
+        // Web : fetch avec header auth puis déclenchement du téléchargement
+        const response = await fetch(invoiceUrl, {
+          headers: { Authorization: `Bearer ${sessionToken}` },
+        });
+        if (!response.ok) {
+          Alert.alert('Erreur', 'Impossible de télécharger la facture');
+          return;
+        }
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `facture_${packId}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
       } else {
-        Alert.alert('Erreur', 'Impossible d\'ouvrir le lien de la facture');
+        // Mobile : token passé en query param (accepté par le backend pour les téléchargements)
+        const urlWithToken = `${invoiceUrl}?token=${encodeURIComponent(sessionToken)}`;
+        const supported = await Linking.canOpenURL(urlWithToken);
+        if (supported) {
+          await Linking.openURL(urlWithToken);
+        } else {
+          Alert.alert('Erreur', "Impossible d'ouvrir le lien de la facture");
+        }
       }
     } catch (error) {
       console.error('Download invoice error:', error);

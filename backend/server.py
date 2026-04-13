@@ -1776,20 +1776,43 @@ def generate_invoice_pdf(invoice_data: dict) -> io.BytesIO:
     return buffer
 
 @api_router.get("/invoices/{pack_id}/pdf")
-async def get_pack_invoice_pdf(pack_id: str, user: User = Depends(get_current_user)):
+async def get_pack_invoice_pdf(pack_id: str, request: Request, token: Optional[str] = Query(None)):
     """Generate and download a PDF invoice for a pack purchase"""
+    # Resolve token: query param (mobile direct URL) → Authorization header → cookie
+    auth_token = token
+    if not auth_token:
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer "):
+            auth_token = auth_header.split(" ")[1]
+    if not auth_token:
+        auth_token = request.cookies.get("session_token") or request.cookies.get("access_token")
+    if not auth_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    payload = decode_token(auth_token)
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    user = User(**user_doc)
+
     pack = await db.packs.find_one({"pack_id": pack_id, "client_id": user.user_id}, {"_id": 0})
     if not pack:
         raise HTTPException(status_code=404, detail="Pack not found")
-    
+
     coach = await db.users.find_one({"user_id": pack["coach_id"]}, {"_id": 0})
     coach_name = coach.get("name", "Coach") if coach else "Coach"
-    
+
     invoice_number = f"FJ-{pack_id[-8:].upper()}-{datetime.now().strftime('%Y%m')}"
-    
+
+    _created_at = pack.get("created_at", datetime.now())
+    if isinstance(_created_at, str):
+        _created_at = datetime.fromisoformat(_created_at.replace("Z", "+00:00"))
+
     invoice_data = {
         "invoice_number": invoice_number,
-        "date": pack.get("created_at", datetime.now()).strftime("%d/%m/%Y"),
+        "date": _created_at.strftime("%d/%m/%Y"),
         "client_name": user.name,
         "client_email": user.email,
         "items": [{
