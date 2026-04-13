@@ -1460,20 +1460,31 @@ async def create_post(post_data: SocialPostCreate, user: User = Depends(get_curr
 
 @api_router.post("/feed/{post_id}/like")
 async def toggle_like(post_id: str, user: User = Depends(get_current_user)):
-    post = await db.social_posts.find_one({"post_id": post_id}, {"_id": 0})
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
-    
-    likes = post.get("likes", [])
-    if user.user_id in likes:
-        likes.remove(user.user_id)
+    # Tenter un unlike atomique : $pull ne s'applique que si user.user_id est dans likes
+    result = await db.social_posts.find_one_and_update(
+        {"post_id": post_id, "likes": user.user_id},
+        {"$pull": {"likes": user.user_id}},
+        return_document=False,
+        projection={"_id": 0, "likes": 1}
+    )
+    if result is not None:
+        # Le user était dans likes → unlike effectué
         liked = False
+        likes_count = len(result.get("likes", [])) - 1
     else:
-        likes.append(user.user_id)
+        # Le user n'était pas dans likes → like atomique via $addToSet
+        result = await db.social_posts.find_one_and_update(
+            {"post_id": post_id},
+            {"$addToSet": {"likes": user.user_id}},
+            return_document=True,
+            projection={"_id": 0, "likes": 1}
+        )
+        if result is None:
+            raise HTTPException(status_code=404, detail="Post not found")
         liked = True
-    
-    await db.social_posts.update_one({"post_id": post_id}, {"$set": {"likes": likes}})
-    return {"liked": liked, "likes_count": len(likes)}
+        likes_count = len(result.get("likes", []))
+
+    return {"liked": liked, "likes_count": likes_count}
 
 @api_router.get("/journal")
 async def get_journal(user: User = Depends(get_current_user)):
@@ -1510,7 +1521,14 @@ async def create_review(review_data: ReviewCreate, user: User = Depends(get_curr
     coach = await db.users.find_one({"user_id": review_data.coach_id, "role": "coach"}, {"_id": 0})
     if not coach:
         raise HTTPException(status_code=404, detail="Coach not found")
-    
+
+    existing = await db.reviews.find_one({
+        "coach_id": review_data.coach_id,
+        "client_id": user.user_id
+    })
+    if existing:
+        raise HTTPException(status_code=400, detail="Vous avez déjà évalué ce coach")
+
     review = Review(
         coach_id=review_data.coach_id,
         client_id=user.user_id,
