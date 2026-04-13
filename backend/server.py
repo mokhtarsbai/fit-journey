@@ -511,39 +511,34 @@ async def find_or_merge_user(email: str, provider: str, social_id: str, name: st
 
 # ============== AUTH ROUTES ==============
 
-@api_router.post("/auth/google")
-async def auth_google(request: Request, response: Response):
-    """Google OAuth authentication via Emergent"""
-    body = await request.json()
-    session_id = body.get("session_id")
-    consent_accepted = body.get("consent_accepted", False)
-    
+async def _google_auth_internal(session_id: str, consent_accepted: bool, response: Response) -> dict:
+    """Logique commune pour l'auth Google — appelée par /auth/google et /auth/session"""
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id required")
-    
+
     if not consent_accepted:
         raise HTTPException(status_code=400, detail="Consent to privacy policy required")
-    
+
     # Get user data from Emergent Auth
     async with httpx.AsyncClient() as http_client:
         auth_response = await http_client.get(
             "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
             headers={"X-Session-ID": session_id}
         )
-        
+
         if auth_response.status_code != 200:
             raise HTTPException(status_code=401, detail="Invalid session_id")
-        
+
         auth_data = auth_response.json()
-    
+
     email = auth_data["email"].lower()
     name = auth_data.get("name", email.split("@")[0])
     picture = auth_data.get("picture")
     social_id = auth_data.get("sub") or hash_email(email)  # Use sub or hash email as unique ID
-    
+
     # Find or merge user
     user_doc = await find_or_merge_user(email, "google", social_id, name, picture)
-    
+
     if not user_doc:
         # Create new user
         user_id = f"user_{uuid.uuid4().hex[:12]}"
@@ -566,17 +561,17 @@ async def auth_google(request: Request, response: Response):
             "created_at": datetime.now(timezone.utc)
         }
         await db.users.insert_one(user_doc)
-        
+
         # Create wallet
         wallet = Wallet(user_id=user_id)
         await db.wallets.insert_one(wallet.model_dump())
-    
+
     user_id = user_doc["user_id"]
-    
+
     # Generate tokens
     access_token = create_access_token(user_id)
     refresh_token = create_refresh_token(user_id)
-    
+
     # Store refresh token
     await db.refresh_tokens.insert_one({
         "user_id": user_id,
@@ -584,7 +579,7 @@ async def auth_google(request: Request, response: Response):
         "expires_at": datetime.now(timezone.utc) + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS),
         "created_at": datetime.now(timezone.utc)
     })
-    
+
     # Also keep legacy session for backward compatibility
     await db.user_sessions.delete_many({"user_id": user_id})
     await db.user_sessions.insert_one({
@@ -593,7 +588,7 @@ async def auth_google(request: Request, response: Response):
         "expires_at": datetime.now(timezone.utc) + timedelta(days=7),
         "created_at": datetime.now(timezone.utc)
     })
-    
+
     # Set cookies
     response.set_cookie(
         key="access_token",
@@ -623,12 +618,12 @@ async def auth_google(request: Request, response: Response):
         path="/",
         max_age=7 * 24 * 60 * 60
     )
-    
+
     # Clean user doc for response - remove sensitive fields and MongoDB _id
     user_doc.pop("_id", None)
     user_doc.pop("password_hash", None)
     user_doc.pop("email_hash", None)
-    
+
     return {
         "user": user_doc,
         "access_token": access_token,
@@ -637,6 +632,17 @@ async def auth_google(request: Request, response: Response):
         "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,
         "session_token": access_token  # Legacy
     }
+
+
+@api_router.post("/auth/google")
+async def auth_google(request: Request, response: Response):
+    """Google OAuth authentication via Emergent"""
+    body = await request.json()
+    return await _google_auth_internal(
+        session_id=body.get("session_id"),
+        consent_accepted=body.get("consent_accepted", False),
+        response=response,
+    )
 
 @api_router.post("/auth/apple")
 async def auth_apple(request: Request, response: Response):
@@ -919,10 +925,11 @@ async def refresh_tokens(data: RefreshTokenRequest, response: Response):
 async def exchange_session(request: Request, response: Response):
     """Legacy: Exchange session_id for session_token (redirects to Google auth)"""
     body = await request.json()
-    body["consent_accepted"] = True  # Assume consent for legacy calls
-    
-    # Forward to Google auth
-    return await auth_google(request, response)
+    return await _google_auth_internal(
+        session_id=body.get("session_id"),
+        consent_accepted=True,  # Assume consent for legacy calls
+        response=response,
+    )
 
 @api_router.get("/auth/me")
 async def get_me(user: User = Depends(get_current_user)):
@@ -1964,10 +1971,19 @@ async def root():
 
 app.include_router(api_router)
 
+ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.environ.get(
+        'ALLOWED_ORIGINS',
+        'http://localhost:8081,http://localhost:19006,http://localhost:3000'
+    ).split(',')
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
