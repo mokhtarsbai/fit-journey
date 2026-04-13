@@ -33,7 +33,7 @@ client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
 # JWT Configuration
-JWT_SECRET = os.environ.get('JWT_SECRET', secrets.token_hex(32))
+JWT_SECRET = os.environ['JWT_SECRET']
 JWT_ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60
 REFRESH_TOKEN_EXPIRE_DAYS = 30
@@ -1743,7 +1743,7 @@ async def get_pack_invoice_pdf(pack_id: str, user: User = Depends(get_current_us
     if not pack:
         raise HTTPException(status_code=404, detail="Pack not found")
     
-    coach = await db.coaches.find_one({"coach_id": pack["coach_id"]}, {"_id": 0})
+    coach = await db.users.find_one({"user_id": pack["coach_id"]}, {"_id": 0})
     coach_name = coach.get("name", "Coach") if coach else "Coach"
     
     invoice_number = f"FJ-{pack_id[-8:].upper()}-{datetime.now().strftime('%Y%m')}"
