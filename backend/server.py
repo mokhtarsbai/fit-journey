@@ -431,9 +431,9 @@ async def get_current_user(request: Request) -> User:
             user_doc = await db.users.find_one({"user_id": user_id}, {"_id": 0})
             if user_doc:
                 return User(**user_doc)
-    except:
+    except HTTPException:
         pass
-    
+
     # Fall back to session lookup
     session_doc = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
     
@@ -1013,7 +1013,7 @@ async def get_terms():
 
 @api_router.put("/users/me")
 async def update_user(update: UserUpdate, user: User = Depends(get_current_user)):
-    update_data = {k: v for k, v in update.model_dump().items() if v is not None}
+    update_data = update.model_dump(exclude_unset=True)
     if update_data:
         await db.users.update_one({"user_id": user.user_id}, {"$set": update_data})
     user_doc = await db.users.find_one({"user_id": user.user_id}, {"_id": 0})
