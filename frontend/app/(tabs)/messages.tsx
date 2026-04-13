@@ -58,6 +58,7 @@ export default function MessagesScreen() {
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const shouldReconnectRef = useRef(true);
 
   // WebSocket connection
   const connectWebSocket = useCallback(() => {
@@ -102,8 +103,9 @@ export default function MessagesScreen() {
       ws.onclose = () => {
         console.log('WebSocket disconnected');
         setWsConnected(false);
-        // Reconnect after 3 seconds
-        setTimeout(connectWebSocket, 3000);
+        if (shouldReconnectRef.current) {
+          setTimeout(connectWebSocket, 3000);
+        }
       };
       
       ws.onerror = (error) => {
@@ -201,8 +203,10 @@ export default function MessagesScreen() {
 
   // Connect WebSocket on mount
   useEffect(() => {
+    shouldReconnectRef.current = true;
     connectWebSocket();
     return () => {
+      shouldReconnectRef.current = false;
       if (wsRef.current) {
         wsRef.current.close();
       }

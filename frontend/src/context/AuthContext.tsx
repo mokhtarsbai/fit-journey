@@ -58,8 +58,37 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const userData = await response.json();
         setUser(userData);
         setSessionToken(storedToken);
+      } else if (response.status === 401) {
+        // Access token expiré — tentative de refresh avant déconnexion
+        const storedRefreshToken = await AsyncStorage.getItem('refresh_token');
+        let refreshed = false;
+        if (storedRefreshToken) {
+          const refreshResponse = await fetch(`${API_URL}/api/auth/refresh`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refresh_token: storedRefreshToken }),
+          });
+          if (refreshResponse.ok) {
+            const refreshData = await refreshResponse.json();
+            await AsyncStorage.setItem('session_token', refreshData.access_token);
+            await AsyncStorage.setItem('refresh_token', refreshData.refresh_token);
+            setSessionToken(refreshData.access_token);
+            const userResponse = await fetch(`${API_URL}/api/auth/me`, {
+              headers: { 'Authorization': `Bearer ${refreshData.access_token}` },
+            });
+            if (userResponse.ok) {
+              setUser(await userResponse.json());
+              refreshed = true;
+            }
+          }
+        }
+        if (!refreshed) {
+          await AsyncStorage.multiRemove(['session_token', 'refresh_token']);
+          setSessionToken(null);
+          setUser(null);
+        }
       } else {
-        await AsyncStorage.removeItem('session_token');
+        await AsyncStorage.multiRemove(['session_token', 'refresh_token']);
         setSessionToken(null);
         setUser(null);
       }
@@ -104,6 +133,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (response.ok) {
         const data = await response.json();
         await AsyncStorage.setItem('session_token', data.session_token);
+        await AsyncStorage.setItem('refresh_token', data.refresh_token);
         setSessionToken(data.session_token);
         setUser(data.user);
         return true;
@@ -128,7 +158,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (error) {
       console.error('Logout error:', error);
     } finally {
-      await AsyncStorage.removeItem('session_token');
+      await AsyncStorage.multiRemove(['session_token', 'refresh_token']);
       setSessionToken(null);
       setUser(null);
     }
