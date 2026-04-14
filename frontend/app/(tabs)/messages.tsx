@@ -70,6 +70,10 @@ export default function MessagesScreen() {
       ws.onopen = () => {
         console.log('WebSocket connected');
         setWsConnected(true);
+        if (pollingRef.current) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
       };
       
       ws.onmessage = (event) => {
@@ -228,7 +232,10 @@ export default function MessagesScreen() {
       }
     }
     return () => {
-      if (pollingRef.current) clearInterval(pollingRef.current);
+      if (pollingRef.current) {
+        clearInterval(pollingRef.current);
+        pollingRef.current = null;
+      }
     };
   }, [selectedPartner, wsConnected]);
 

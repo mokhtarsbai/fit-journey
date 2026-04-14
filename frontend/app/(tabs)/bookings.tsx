@@ -179,7 +179,7 @@ export default function BookingsScreen() {
     (s) => s.status === 'confirmed' && new Date(s.date) > new Date()
   );
   const pastSessions = sessions.filter(
-    (s) => s.status === 'completed' || new Date(s.date) < new Date()
+    (s) => s.status === 'completed' || (s.status === 'confirmed' && new Date(s.date) < new Date())
   );
 
   return (
